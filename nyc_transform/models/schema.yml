@@ -54,6 +54,44 @@ models:
       - name: city
         description: "Upper-cased city name (e.g. BROOKLYN, MANHATTAN)."
 
+  - name: mart_daily_volume
+    description: >
+      Pre-aggregated daily complaint counts broken down by complaint_date,
+      agency, and complaint_type. Includes monthly grain, open/closed splits,
+      and average resolution hours per bucket. Powers the daily volume trend
+      chart in the Streamlit dashboard without ad-hoc GROUP BY at query time.
+
+    columns:
+      - name: complaint_date
+        description: "Calendar date (DATE) of complaints created."
+        tests:
+          - not_null
+
+      - name: complaint_month
+        description: "First day of the month the complaint falls in (DATE)."
+        tests:
+          - not_null
+
+      - name: agency
+        description: "Short agency code."
+
+      - name: complaint_type
+        description: "Category of the complaint."
+
+      - name: total_complaints
+        description: "Total complaints for this date/agency/type bucket."
+        tests:
+          - not_null
+
+      - name: closed_complaints
+        description: "Number of closed complaints in the bucket."
+
+      - name: open_complaints
+        description: "Number of open/non-closed complaints in the bucket."
+
+      - name: avg_resolution_hours
+        description: "Average resolution hours for closed complaints in the bucket."
+
   - name: mart_agency_performance
     description: >
       Pre-aggregated agency-level performance mart. One row per
