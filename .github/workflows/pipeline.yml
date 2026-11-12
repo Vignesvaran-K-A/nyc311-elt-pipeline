@@ -4,34 +4,36 @@ on:
   workflow_dispatch:
     inputs:
       start_date:
-        description: 'Start Date (YYYY-MM-DD) - Leave empty for yesterday'
+        description: 'Start Date (YYYY-MM-DD) — leave empty to default to yesterday'
         type: string
         required: false
         default: '2026-09-01'
       end_date:
-        description: 'End Date (YYYY-MM-DD) - Leave empty for current time'
+        description: 'End Date (YYYY-MM-DD) — leave empty for no upper bound'
         type: string
         required: false
         default: '2026-10-31'
       max_records:
-        description: 'Max records to fetch (e.g. 50000, or 0 for unlimited)'
+        description: 'Max records to fetch per run (0 = unlimited)'
         type: string
         required: false
         default: '50000'
       dbt_target:
-        description: dbt target profile
+        description: 'dbt target profile'
         type: choice
         options:
           - dev
           - prod
         default: dev
       dbt_select:
-        description: Optional dbt node selection
+        description: 'Optional dbt node selection (e.g. stg_nyc_311+)'
         type: string
         required: false
         default: ""
       full_refresh:
-        description: Rebuild incremental models with --full-refresh
+        description: >
+          Force a full rebuild of incremental models (--full-refresh).
+          Use when backfilling historical data or after a schema change.
         type: boolean
         default: false
 
@@ -44,23 +46,36 @@ concurrency:
 
 env:
   IMAGE_NAME: nyc311-elt
-  IMAGE_TAG: ${{ github.sha }}
+  IMAGE_TAG:  ${{ github.sha }}
   GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
-  BQ_LOCATION: ${{ vars.BQ_LOCATION || 'US' }}
-  DBT_TARGET: ${{ inputs.dbt_target }}
+  BQ_LOCATION:    ${{ vars.BQ_LOCATION || 'US' }}
+  DBT_TARGET:     ${{ inputs.dbt_target }}
 
 jobs:
   elt:
-    name: Ingest and transform
+    name: Ingest → Transform → Test
     runs-on: ubuntu-latest
     timeout-minutes: 60
+
     steps:
+      # -----------------------------------------------------------------------
+      # 1. Source code
+      # -----------------------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # -----------------------------------------------------------------------
+      # 2. Build tooling
+      # -----------------------------------------------------------------------
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      # -----------------------------------------------------------------------
+      # 3. Google Cloud authentication
+      #    GCP_SA_KEY is stored as an encrypted GitHub Secret.
+      #    The auth action writes a temporary credentials file and exports its
+      #    path so later steps can volume-mount it into Docker containers.
+      # -----------------------------------------------------------------------
       - name: Authenticate to Google Cloud
         id: gcp_auth
         uses: google-github-actions/auth@v2
@@ -70,34 +85,46 @@ jobs:
       - name: Allow containers to read credentials
         run: chmod 644 "${{ steps.gcp_auth.outputs.credentials_file_path }}"
 
+      # -----------------------------------------------------------------------
+      # 4. Build the pipeline image (once; reused for ingest, dbt run, dbt test)
+      # -----------------------------------------------------------------------
       - name: Build pipeline image
         uses: docker/build-push-action@v6
         with:
           context: .
           load: true
           tags: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
-          #cache-from: type=gha
-          #cache-to: type=gha,mode=max
 
+      # -----------------------------------------------------------------------
+      # 5. Prepare dbt artifact directories (volume-mounted into containers)
+      # -----------------------------------------------------------------------
       - name: Prepare dbt directories
         run: mkdir -p dbt/target dbt/dbt_packages
 
+      # -----------------------------------------------------------------------
+      # 6. Resolve dbt CLI flags from inputs
+      #    --select   : run only specific models/paths
+      #    --full-refresh : force incremental models to rebuild completely
+      # -----------------------------------------------------------------------
       - name: Resolve dbt flags
         env:
-          DBT_SELECT: ${{ inputs.dbt_select }}
+          DBT_SELECT:   ${{ inputs.dbt_select }}
           FULL_REFRESH: ${{ inputs.full_refresh }}
         run: |
           FLAGS=""
-          if [ -n "$DBT_SELECT" ]; then FLAGS="$FLAGS --select $DBT_SELECT"; fi
-          if [ "$FULL_REFRESH" = "true" ]; then FLAGS="$FLAGS --full-refresh"; fi
+          if [ -n "$DBT_SELECT" ];         then FLAGS="$FLAGS --select $DBT_SELECT"; fi
+          if [ "$FULL_REFRESH" = "true" ]; then FLAGS="$FLAGS --full-refresh";       fi
           echo "DBT_FLAGS=$FLAGS" >> "$GITHUB_ENV"
 
-      - name: Run ingestion container (NYC 311 to BigQuery raw)
+      # -----------------------------------------------------------------------
+      # 7. EXTRACT & LOAD — Python ingestion into BigQuery bronze layer
+      # -----------------------------------------------------------------------
+      - name: Run ingestion (NYC 311 Socrata API → BigQuery bronze)
         env:
           SOCRATA_APP_TOKEN: ${{ secrets.SOCRATA_APP_TOKEN }}
-          START_DATE: ${{ inputs.start_date }}
-          END_DATE: ${{ inputs.end_date }}
-          MAX_RECORDS: ${{ inputs.max_records }}
+          START_DATE:        ${{ inputs.start_date }}
+          END_DATE:          ${{ inputs.end_date }}
+          MAX_RECORDS:       ${{ inputs.max_records }}
         run: |
           docker run --rm \
             -v "${{ steps.gcp_auth.outputs.credentials_file_path }}:/secrets/gcp.json:ro" \
@@ -107,14 +134,10 @@ jobs:
             "$IMAGE_NAME:$IMAGE_TAG" \
             python extract_load.py
 
-      # - name: Install dbt packages
-      #   run: |
-      #     docker run --rm \
-      #       -v "$GITHUB_WORKSPACE/dbt/dbt_packages:/app/dbt/dbt_packages" \
-      #       "$IMAGE_NAME:$IMAGE_TAG" \
-      #       dbt deps --project-dir /app/dbt --profiles-dir /app/dbt
-
-      - name: Verify BigQuery connection
+      # -----------------------------------------------------------------------
+      # 8. Verify BigQuery connection before running dbt
+      # -----------------------------------------------------------------------
+      - name: Verify BigQuery connection (dbt debug)
         run: |
           docker run --rm \
             -v "${{ steps.gcp_auth.outputs.credentials_file_path }}:/secrets/gcp.json:ro" \
@@ -124,6 +147,9 @@ jobs:
             "$IMAGE_NAME:$IMAGE_TAG" \
             dbt debug --project-dir /app/dbt --profiles-dir /app/dbt --target "$DBT_TARGET"
 
+      # -----------------------------------------------------------------------
+      # 9. TRANSFORM — dbt run (incremental by default; --full-refresh optional)
+      # -----------------------------------------------------------------------
       - name: Run dbt models
         run: |
           docker run --rm \
@@ -135,17 +161,38 @@ jobs:
             "$IMAGE_NAME:$IMAGE_TAG" \
             dbt run --project-dir /app/dbt --profiles-dir /app/dbt --target "$DBT_TARGET" $DBT_FLAGS
 
+      # -----------------------------------------------------------------------
+      # 10. TEST — dbt test (runs all schema + singular tests)
+      # -----------------------------------------------------------------------
+      - name: Run dbt tests
+        run: |
+          docker run --rm \
+            -v "${{ steps.gcp_auth.outputs.credentials_file_path }}:/secrets/gcp.json:ro" \
+            -v "$GITHUB_WORKSPACE/dbt/target:/app/dbt/target" \
+            -v "$GITHUB_WORKSPACE/dbt/dbt_packages:/app/dbt/dbt_packages" \
+            -e GOOGLE_APPLICATION_CREDENTIALS=/secrets/gcp.json \
+            -e GCP_PROJECT_ID -e BQ_LOCATION \
+            "$IMAGE_NAME:$IMAGE_TAG" \
+            dbt test --project-dir /app/dbt --profiles-dir /app/dbt --target "$DBT_TARGET"
+
+      # -----------------------------------------------------------------------
+      # 11. Publish a markdown run summary to the GitHub Actions UI
+      # -----------------------------------------------------------------------
       - name: Publish run summary
         if: always() && hashFiles('dbt/target/run_results.json') != ''
         run: |
           {
-            echo "### dbt run results (${DBT_TARGET})"
+            echo "### dbt results (${DBT_TARGET})"
             echo
             echo "| Status | Count |"
             echo "|---|---|"
-            jq -r '.results | group_by(.status) | map("| \(.[0].status) | \(length) |") | .[]' dbt/target/run_results.json
+            jq -r '.results | group_by(.status) | map("| \(.[0].status) | \(length) |") | .[]' \
+              dbt/target/run_results.json
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # -----------------------------------------------------------------------
+      # 12. Upload dbt artifacts for post-run debugging (14-day retention)
+      # -----------------------------------------------------------------------
       - name: Upload dbt artifacts
         if: always()
         uses: actions/upload-artifact@v4
