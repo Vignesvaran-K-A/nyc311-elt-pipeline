@@ -19,8 +19,8 @@ import requests
 from google.cloud import bigquery
 
 SOCRATA_ENDPOINT = "https://data.cityofnewyork.us/resource/erm2-nwe9.json"
-DEFAULT_PROJECT_ID = os.environ.get("GCP_PROJECT_ID", "nyc-311-pipeline-512717")
-DEFAULT_TABLE_ID = f"{DEFAULT_PROJECT_ID}.bronze_layer.raw_nyc_311"
+DEFAULT_PROJECT_ID = os.environ.get("GCP_PROJECT_ID")  # Required env var — no hardcoded fallback
+DEFAULT_TABLE_ID = f"{DEFAULT_PROJECT_ID}.bronze_layer.raw_nyc_311" if DEFAULT_PROJECT_ID else None
 DEFAULT_BATCH_SIZE = 25000  # Socrata max is 50,000
 
 
@@ -200,8 +200,8 @@ def main():
     parser.add_argument(
         "--table",
         type=str,
-        default=os.environ.get("BQ_TABLE_ID", DEFAULT_TABLE_ID),
-        help=f"BigQuery destination table (default: {DEFAULT_TABLE_ID})",
+        default=os.environ.get("BQ_TABLE_ID"),   # Resolved after arg parsing below
+        help="BigQuery destination table (defaults to <GCP_PROJECT_ID>.bronze_layer.raw_nyc_311)",
     )
     parser.add_argument(
         "--app-token",
@@ -211,6 +211,19 @@ def main():
     )
 
     args = parser.parse_args()
+
+    # Validate GCP_PROJECT_ID is resolvable
+    table_default = os.environ.get("BQ_TABLE_ID") or (
+        f"{os.environ['GCP_PROJECT_ID']}.bronze_layer.raw_nyc_311"
+        if os.environ.get("GCP_PROJECT_ID")
+        else None
+    )
+    if args.table is None and table_default is None:
+        parser.error(
+            "GCP_PROJECT_ID environment variable is required when --table is not specified."
+        )
+    if args.table is None:
+        args.table = table_default
 
     # 0 or negative means unlimited
     max_records = None if (args.max_records is None or args.max_records <= 0) else args.max_records

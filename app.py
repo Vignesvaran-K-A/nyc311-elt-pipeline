@@ -33,9 +33,18 @@ st.set_page_config(
 )
 
 # ---------------------------------------------------------------------------
-# Constants
+# Constants — project ID must be set as an environment variable.
+# Locally: export GCP_PROJECT_ID=<your-project>
+# In production: injected by GitHub Actions via vars.GCP_PROJECT_ID
 # ---------------------------------------------------------------------------
-PROJECT_ID = os.environ.get("GCP_PROJECT_ID", "nyc-311-pipeline-512717")
+if not os.environ.get("GCP_PROJECT_ID"):
+    st.error(
+        "**`GCP_PROJECT_ID` environment variable is not set.**\n\n"
+        "Run: `export GCP_PROJECT_ID=<your-gcp-project>` before starting Streamlit."
+    )
+    st.stop()
+
+PROJECT_ID = os.environ["GCP_PROJECT_ID"]
 DATASET = "silver_layer"
 STG_TABLE = f"`{PROJECT_ID}.{DATASET}.stg_nyc_311`"
 MART_TABLE = f"`{PROJECT_ID}.{DATASET}.mart_agency_performance`"
