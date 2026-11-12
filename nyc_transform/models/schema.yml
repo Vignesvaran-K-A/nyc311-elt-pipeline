@@ -2,13 +2,85 @@ version: 2
 
 models:
   - name: stg_nyc_311
-    description: "Cleaned and standardized NYC 311 complaints."
+    description: >
+      Cleaned, deduplicated, and type-cast NYC 311 service requests sourced
+      from the bronze layer. One row per unique complaint. All string columns
+      are trimmed and empty strings converted to NULL. Timestamps are safely
+      cast so malformed values produce NULL rather than pipeline failures.
+      Coordinates outside NYC geographic bounds and malformed ZIP codes are
+      nullified. Rows where closed_at precedes created_at are excluded.
+
     columns:
       - name: complaint_id
-        description: "The primary key for the complaint."
+        description: "Unique identifier for the complaint (cast from unique_key)."
         tests:
           - unique
           - not_null
+
       - name: created_at
+        description: "Timestamp when the complaint was filed."
         tests:
           - not_null
+
+      - name: closed_at
+        description: "Timestamp when the complaint was resolved. NULL if still open."
+
+      - name: agency
+        description: "Short agency code (e.g. NYPD, DEP, HPD)."
+        tests:
+          - not_null
+
+      - name: status
+        description: "Current status of the complaint."
+        tests:
+          - accepted_values:
+              values: ['Open', 'Closed', 'Pending', 'In Progress', 'Assigned',
+                       'Started', 'Unspecified', 'Draft']
+              severity: warn    # Warn only – the API may introduce new statuses
+
+      - name: latitude
+        description: >
+          Latitude of the incident location. NULL when outside NYC bounding
+          box (40.4 – 41.0) or when the source value is non-numeric.
+
+      - name: longitude
+        description: >
+          Longitude of the incident location. NULL when outside NYC bounding
+          box (-74.3 – -73.7) or when the source value is non-numeric.
+
+      - name: zip_code
+        description: "5-digit US ZIP code. NULL for non-numeric or wrong-length values."
+
+      - name: city
+        description: "Upper-cased city name (e.g. BROOKLYN, MANHATTAN)."
+
+  - name: mart_agency_performance
+    description: >
+      Pre-aggregated agency-level performance mart. One row per
+      (agency, agency_name) pair. Provides total complaint volume,
+      closed complaint count, and average resolution hours.
+      Consumers: Streamlit dashboard 'Fastest Resolving Agencies' chart.
+
+    columns:
+      - name: agency
+        description: "Short agency code. Part of the composite primary key."
+        tests:
+          - not_null
+
+      - name: agency_name
+        description: "Full agency name. Part of the composite primary key."
+
+      - name: total_complaints
+        description: "Total complaints received by this agency across all time."
+        tests:
+          - not_null
+
+      - name: closed_complaints
+        description: "Number of complaints with status = 'Closed'."
+        tests:
+          - not_null
+
+      - name: avg_resolution_hours
+        description: >
+          Average hours between created_at and closed_at for closed complaints.
+          NULL when no complaints have been closed.
