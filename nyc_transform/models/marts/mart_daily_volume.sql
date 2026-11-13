@@ -1,7 +1,3 @@
-{{
-    config(materialized='table')
-}}
-
 -- mart_daily_volume: pre-aggregated daily complaint counts with complaint type
 -- and agency breakdown. Powers the "Daily Complaint Volume" chart in the
 -- Streamlit dashboard and replaces the ad-hoc GROUP BY run in app.py at query time.
@@ -30,4 +26,3 @@ select
 from {{ ref('stg_nyc_311') }}
 where created_at is not null
 group by 1, 2, 3, 4
-order by 1, 3, 4

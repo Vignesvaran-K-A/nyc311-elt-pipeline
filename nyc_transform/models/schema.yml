@@ -25,6 +25,14 @@ models:
       - name: closed_at
         description: "Timestamp when the complaint was resolved. NULL if still open."
 
+      - name: updated_at
+        description: >
+          Most recent timestamp indicating activity on the complaint, derived from
+          resolution_action_updated_date, closed_date, or created_date. Used as the
+          high-water mark for incremental models.
+        tests:
+          - not_null
+
       - name: agency
         description: "Short agency code (e.g. NYPD, DEP, HPD)."
         tests:
