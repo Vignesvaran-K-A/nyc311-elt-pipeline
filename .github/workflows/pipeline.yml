@@ -7,12 +7,12 @@ on:
         description: 'Start Date (YYYY-MM-DD) — leave empty to default to yesterday'
         type: string
         required: false
-        default: '2026-09-01'
+        default: ''
       end_date:
         description: 'End Date (YYYY-MM-DD) — leave empty for no upper bound'
         type: string
         required: false
-        default: '2026-10-31'
+        default: ''
       max_records:
         description: 'Max records to fetch per run (0 = unlimited)'
         type: string
