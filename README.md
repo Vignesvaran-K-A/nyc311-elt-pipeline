@@ -1,15 +1,15 @@
-# 🏙️ NYC 311 End-to-End ELT Data Pipeline & Analytics Platform
+# 🏙️ NYC 311 Service-Request Analytics Pipeline
 
-An enterprise-grade, cloud-native data engineering pipeline that ingests, cleans, transforms, and visualizes real-time NYC 311 public service request data. Built with modern data stack principles using the **Medallion Architecture**, automated CI/CD workflows, modular dbt transformations, and an interactive analytics frontend.
+A cloud-native data engineering pipeline that ingests, cleans, transforms, and visualizes NYC 311 public service request data. Built as a **batch ELT pipeline triggered on demand via GitHub Actions**, implementing the Medallion Architecture across Google Cloud BigQuery, dbt, and Streamlit.
 
 ---
 
-## ⚡ Performance & Volume Benchmarks
+## ⚡ Pipeline Execution & Test Metrics
 
-* **Data Ingestion Throughput:** Ingests up to **50,000 raw records in ~18 seconds** via paginated API batching directly into BigQuery bronze tables.
-* **Transformations & Testing:** **11 data tests** passing across staging models and marts, validating referential integrity, null constraints, and domain logic in **< 12 seconds**.
-* **Zero Hardcoded Configs:** Fully decoupled across environments using cloud runtime secrets and environment variables (`GCP_PROJECT_ID`, `DBT_KEYFILE`, etc.).
-* **Incremental Processing:** Partition-pruned BigQuery merge strategy reduces transformation compute and query scan costs by **>85%** on scheduled runs.
+* **dbt Transformations:** Builds `stg_nyc_311` (incremental staging), `mart_agency_performance` (table), and `mart_daily_volume` (table) in **11.19 seconds**.
+* **Data Quality Verification:** **13 automated dbt tests** passing in **11.02 seconds** (`PASS=13 WARN=0 ERROR=0`), testing referential integrity, status domain values, null constraints, and custom logical assertions.
+* **Environment Portability:** Fully decoupled configuration via environment variables (`GCP_PROJECT_ID`, `DBT_KEYFILE`, etc.) with zero hardcoded credentials or project IDs.
+* **Incremental Processing with Late-Arriving Updates:** Staging layer merges on `complaint_id` with high-water mark tracking (`updated_at` / `resolution_action_updated_date`) and partition pruning predicates to capture downstream status transitions from Open to Closed without re-scanning historical tables.
 
 ---
 
@@ -58,7 +58,7 @@ An enterprise-grade, cloud-native data engineering pipeline that ingests, cleans
    * **`stg_nyc_311`**: Cleans whitespace, converts empty strings to `NULL`, standardizes city casing, validates 5-digit ZIP codes, safely casts timestamps, and removes duplicate requests via window functions (`row_number() over (partition by unique_key order by created_date desc)`). Configured with BigQuery daily partitioning on `created_at` and clustering by `agency`.
    * **`mart_daily_volume`**: Aggregates daily complaint volumes with month truncations, open vs. closed counts, and average resolution times.
    * **`mart_agency_performance`**: Aggregates total complaint volumes, closed case tallies, and agency-level average resolution times in hours.
-   * **Data Quality Tests**: 11 dbt schema tests (`unique`, `not_null`, `accepted_values`) plus singular custom SQL assertions (`assert_no_closed_before_created.sql`).
+   * **Data Quality Tests**: 13 dbt schema tests (`unique`, `not_null`, `accepted_values`) plus singular custom SQL assertions (`assert_no_closed_before_created.sql`).
 
 3. **CI/CD Automation (GitHub Actions):**
    * Containerized pipeline packaged with **Docker**.
@@ -84,7 +84,7 @@ nyc311-elt-pipeline/
 ├── nyc_transform/                           # dbt project directory
 │   ├── models/
 │   │   ├── sources.yml                     # Bronze layer BigQuery source definitions
-│   │   ├── schema.yml                      # Model documentation & 11 data tests
+│   │   ├── schema.yml                      # Model documentation & 13 data tests
 │   │   ├── staging/
 │   │   │   └── stg_nyc_311.sql             # Incremental cleaned silver staging model
 │   │   └── marts/
@@ -169,7 +169,7 @@ dbt run --project-dir nyc_transform --profiles-dir .
 # Rebuild all models from scratch
 dbt run --project-dir nyc_transform --profiles-dir . --full-refresh
 
-# Run all 11+ data quality tests
+# Run all 13 data quality tests
 dbt test --project-dir nyc_transform --profiles-dir .
 ```
 
