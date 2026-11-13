@@ -48,6 +48,7 @@ PROJECT_ID = os.environ["GCP_PROJECT_ID"]
 DATASET = "silver_layer"
 STG_TABLE = f"`{PROJECT_ID}.{DATASET}.stg_nyc_311`"
 MART_TABLE = f"`{PROJECT_ID}.{DATASET}.mart_agency_performance`"
+DAILY_MART_TABLE = f"`{PROJECT_ID}.{DATASET}.mart_daily_volume`"
 
 CACHE_TTL_SECONDS = 3600
 DEFAULT_WINDOW_DAYS = 90  # default date window ending at the latest request date
@@ -154,12 +155,16 @@ def load_kpis(start: date, end: date, agencies: tuple) -> dict:
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner="Loading daily volume...")
 def load_daily_volume(start: date, end: date, agencies: tuple) -> pd.DataFrame:
-    """Number of requests created per day."""
+    """Number of requests created per day, read from mart_daily_volume."""
     df = run_query(
         f"""
-        SELECT DATE(created_at) AS created_day, COUNT(*) AS requests
-        FROM {STG_TABLE}
-        WHERE {FILTER_SQL}
+        SELECT
+            complaint_date AS created_day,
+            SUM(total_complaints) AS requests
+        FROM {DAILY_MART_TABLE}
+        WHERE
+            complaint_date BETWEEN @start_date AND @end_date
+            AND (COALESCE(ARRAY_LENGTH(@agencies), 0) = 0 OR agency IN UNNEST(@agencies))
         GROUP BY created_day
         ORDER BY created_day
         """,
