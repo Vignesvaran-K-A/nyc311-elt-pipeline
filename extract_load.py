@@ -13,7 +13,7 @@ Supports:
 
 import argparse
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import pandas as pd
 import requests
 from google.cloud import bigquery
@@ -141,7 +141,11 @@ def fetch_data(
     if not all_records:
         return pd.DataFrame()
 
-    return pd.DataFrame(all_records)
+    df = pd.DataFrame(all_records)
+    # Add ingestion metadata timestamp so downstream incremental models
+    # can reliably filter on newly landed records regardless of original created_date
+    df["_loaded_at"] = datetime.now(timezone.utc).isoformat()
+    return df
 
 
 def load_to_bigquery(df: pd.DataFrame, table_id: str = DEFAULT_TABLE_ID):
@@ -157,7 +161,10 @@ def load_to_bigquery(df: pd.DataFrame, table_id: str = DEFAULT_TABLE_ID):
         autodetect=True,
     )
 
-    df_str = df.astype(str)
+    # Replace NaN/None with None/empty before string conversion
+    # to prevent literal 'nan' strings from polluting the bronze layer
+    df = df.where(df.notna(), None)
+    df_str = df.astype(str).replace({"None": None, "nan": None, "<NA>": None})
     job = client.load_table_from_dataframe(df_str, table_id, job_config=job_config)
     job.result()
     print(f"Successfully loaded {len(df):,} rows into `{table_id}`.")
